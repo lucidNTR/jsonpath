@@ -23,7 +23,7 @@
 %% @copyright (c) 2012 Gene Stevens.  All Rights Reserved.
 %%
 -module(jsonpath).
--export([search/2, replace/3]).
+-export([search/2, replace/3, add/3]).
 -export([parse_path/1]).
 
 -include("jsonpath.hrl").
@@ -37,6 +37,151 @@ replace(Path, Replace, Data) when is_binary(Data) ->
 	replace(Path, Replace, jiffy:decode(Data));
 replace(Path, Replace, Data) ->
 	replace_data(parse_path(Path), Replace, Data).
+
+add(Path, Add, Data) when is_binary(Data) ->
+	add(Path, Add, jiffy:decode(Data));
+add(Path, Add, Data) ->
+	add_data( parse_path(Path), Add, Data ).
+
+
+add_data([SearchHead|SearchTail], AddData, Structure) ->
+	%TODO: Replace this check with proper path parsing just checking for type here
+	try 
+		_ = list_to_integer( binary_to_list(SearchHead) ),
+		add_list( [SearchHead|SearchTail], AddData, Structure )
+	catch
+		_:_ ->
+			{ TupleList } = Structure,
+			{ add_tuples( [SearchHead|SearchTail], AddData, TupleList ) }
+	end.
+
+
+add_list([SearchHead|SearchTail], AddData, List) ->
+	try 
+		Index = list_to_integer(binary_to_list(SearchHead)) + 1,
+		case (Index > length(List)) of
+			true ->
+				add_list([length(List)+1|SearchTail], AddData, List, 1, []);
+			false ->
+				add_list([Index|SearchTail], AddData, List, 1, [])
+		end
+	catch
+		_:_ ->
+			case SearchTail of
+				[] ->
+					[ AddData ];
+				_SearchTail ->
+					[ add_data(SearchTail, AddData, List) ]
+			end
+	end.
+add_list([SearchHead|_SearchTail], AddData, [], Count, Accum) ->
+	case SearchHead of
+		Count ->
+			lists:append( lists:reverse(Accum), [AddData] );
+		_Else ->
+			lists:reverse(Accum)
+	end;
+add_list([SearchHead|SearchTail], AddData, [Head|Tail], Count, Accum) ->
+	Data = case SearchHead of 
+		Count ->
+			case SearchTail of
+				[] ->
+					AddData;
+				_SearchTail ->
+					add_data(SearchTail, AddData, Head)
+			end;
+		_SearchHead ->
+			Head
+	end,
+	add_list([SearchHead|SearchTail], AddData, Tail, Count+1, [Data|Accum]).
+
+
+
+
+add_tuples(Search, AddData, TupleList) ->
+	add_tuples(Search, AddData, TupleList, []).
+
+
+
+
+
+
+
+add_tuples([SearchHead|SearchTail], AddData, [], Accum) ->
+	case Accum of
+		[] ->
+			case SearchTail of 
+				[] ->
+					[{ SearchHead, AddData }];
+				_SearchTail ->
+					[{ SearchHead, add_data( SearchTail, AddData, {[{}]} ) }]
+			end;
+		_Else ->
+			case SearchTail of 
+				[] ->
+					%erlang:display([binary_to_list(SearchHead)),
+					lists:reverse(Accum);
+				_SearchTail ->
+					%erlang:display([binary_to_list(SearchHead), SearchTail]),
+					lists:reverse(Accum)
+			end
+	end;
+add_tuples( [SearchHead | SearchTail], AddData, [FirstTuple | RestTuple], Accum ) ->
+	Data = 
+	case FirstTuple of
+		{ SearchHead, Value } ->
+			case SearchTail of 
+				[] ->
+					% No Path left to go and key found, change data...
+					Pest = true,
+					{ SearchHead, AddData };
+				_SearchTail ->
+					% Path left to go and found right key, add value to substructure...
+					Pest = false,
+					{ SearchHead, add_data(SearchTail, AddData, Value) }
+			end;
+		_FirstTuple ->
+			case RestTuple of
+				[] ->
+					case SearchTail of 
+						[] ->
+							% End of structure reached, no search path left, add structure to end of tuple
+							Pest = true,
+							[{ SearchHead, AddData }, FirstTuple];
+						_SearchTail ->
+							Pest = false,
+							[{ SearchHead, add_data(SearchTail, AddData, {[{ }]} ) }, FirstTuple ]
+					end;
+				_Else ->
+					Pest = true,
+					FirstTuple	
+			end
+	end,
+	case Data of 
+		[One, {}] ->
+			Acc2 = [One|Accum];
+		[One, Two] ->
+			Acc2 = [One, Two|Accum];
+		Else  ->
+			Acc2 = [Else|Accum]
+	end,
+	case Pest of 
+		true ->
+			add_tuples( [SearchHead|SearchTail], AddData, RestTuple, Acc2 );
+		false ->
+			lists:reverse( lists:append( RestTuple, Acc2 ) )
+	end.
+	
+
+
+
+
+
+
+
+
+
+
 
 replace_data([SearchHead|SearchTail], Replace, Structure) ->
 	case Structure of 
@@ -156,5 +301,5 @@ search_tuple([Head|Tail], Tuple) ->
 
 parse_path(Path) ->
 	Split = binary:split(Path, [<<".">>,<<"[">>,<<"]">>], [global]),
-	lists:filter(fun(X) -> X =/= <<>> end, Split).
+	lists:filter( fun(X) -> X =/= <<>> end, Split ).
 
